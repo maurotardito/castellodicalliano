@@ -453,7 +453,6 @@ export default function CheckInApp() {
                       );
                     })}
                   </div>
-                  </div>
                 </div>
 
                 {/* Date */}
