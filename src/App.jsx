@@ -1,4 +1,4 @@
-/** @jsxRuntime automatic */
+
 import React, { useState, useRef, useCallback, useEffect } from "react";
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
