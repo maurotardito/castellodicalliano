@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useCallback, useEffect } from "react";
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
@@ -55,7 +54,6 @@ function findConflict(bookings, newBooking) {
 }
 
 // ─── STORAGE ──────────────────────────────────────────────────────────────────
-const SHEETS_URL = "https://script.google.com/macros/s/AKfycbzllua3NYRFIjWA4OOGw_ZBy6F-FYlb8LRuieVSHeGLaYdhMiPR-tUnr70ZI9X7k05O/exec";
 const DB_KEY = "checkin-bookings-v3";
 async function loadBookings() {
   try { const r = await window.storage.get(DB_KEY); return r ? JSON.parse(r.value) : []; }
@@ -137,7 +135,7 @@ function Field({ label, value, onChange, type="text", options, span }) {
   );
 }
 
-function Spinner({ label="Lettura documento…" }) {
+function Spinner({ label="OCR in corso… (20-30 sec)" }) {
   return (
     <div style={{ display:"flex", alignItems:"center", gap:12, padding:"14px 0" }}>
       <div style={{ width:28, height:28, border:`2.5px solid ${C.border}`, borderTopColor:C.brown, borderRadius:"50%", animation:"spin 0.8s linear infinite", flexShrink:0 }} />
@@ -285,51 +283,89 @@ export default function CheckInApp() {
   const addGuest = () => setBooking(b=>({...b,guests:[...b.guests,emptyPerson()]}));
   const removeGuest = idx => setBooking(b=>({...b,guests:b.guests.filter((_,i)=>i!==idx)}));
 
-  // ── scan ──
+  // ── scan con Tesseract.js ──
   const triggerScan = idx => { scanIdx.current=idx; fileRef.current.click(); };
+
+  // Estrae campi strutturati dal testo grezzo OCR di un documento italiano
+  function parseDocumentText(text) {
+    const t = text.toUpperCase().replace(/\n/g, " ").replace(/\s+/g, " ");
+    const result = {};
+
+    // Tipo documento
+    if (/PASSAPORTO|PASSPORT/.test(t)) result.tipoDoc = "PASSAPORTO";
+    else if (/PATENTE|DRIVING/.test(t)) result.tipoDoc = "PATENTE";
+    else result.tipoDoc = "CARTA D'IDENTITÀ";
+
+    // Numero documento (formato: CA00000AA o simili)
+    const numDoc = t.match(/\b([A-Z]{2}\d{5}[A-Z]{2}|[A-Z]{2}\d{7}|[A-Z0-9]{7,9})\b/);
+    if (numDoc) result.numDoc = numDoc[1];
+
+    // Data di nascita (cerca pattern GG/MM/AAAA o GG.MM.AAAA o AAAA-MM-GG)
+    const datePatterns = [
+      /(\d{2})[\/\.\-](\d{2})[\/\.\-](\d{4})/g,
+      /(\d{4})[\/\.\-](\d{2})[\/\.\-](\d{2})/g,
+    ];
+    const dates = [];
+    for (const pat of datePatterns) {
+      let m;
+      while ((m = pat.exec(t)) !== null) {
+        const [_, a, b, c] = m;
+        // se primo gruppo è anno (4 cifre)
+        if (a.length === 4) dates.push(`${a}-${b}-${c}`);
+        else dates.push(`${c}-${b}-${a}`);
+      }
+    }
+    // La data di nascita è solitamente la più vecchia
+    if (dates.length > 0) {
+      dates.sort();
+      result.dataNascita = dates[0];
+    }
+
+    // Sesso
+    if (/\bM\b|\bMASCHIO\b|\bMALE\b/.test(t)) result.sesso = "M";
+    else if (/\bF\b|\bFEMMINA\b|\bFEMALE\b/.test(t)) result.sesso = "F";
+
+    // Cognome e Nome — su carta identità italiana sono spesso dopo le etichette
+    const cognomeMatch = t.match(/COGNOME[:\s]+([A-Z\s']+?)(?:\s{2,}|NOME|$)/);
+    if (cognomeMatch) result.cognome = cognomeMatch[1].trim();
+
+    const nomeMatch = t.match(/NOME[:\s]+([A-Z\s']+?)(?:\s{2,}|COGNOME|SESSO|NATO|$)/);
+    if (nomeMatch) result.nome = nomeMatch[1].trim();
+
+    // Comune di nascita
+    const natoMatch = t.match(/NATO[\/A]?\s+A[:\s]+([A-Z\s']+?)(?:\s{2,}|IL|$)/);
+    if (natoMatch) result.comuneNascita = natoMatch[1].trim();
+
+    // Cittadinanza / Nazionalità
+    if (/ITALIANA|ITALIAN/.test(t)) { result.cittadinanza = "ITALIA"; result.statoNascita = "ITALIA"; }
+
+    return result;
+  }
+
   const handleFileChange = useCallback(async e => {
     const file = e.target.files[0]; if(!file) return;
     const idx = scanIdx.current;
     setScanningIdx(idx);
-    const reader = new FileReader();
-    reader.onload = async ev => {
-      try {
-        const base64 = ev.target.result.split(",")[1];
-        const res = await fetch("https://api.anthropic.com/v1/messages",{
-method:"POST", headers:{"Content-Type":"application/json","x-api-key":import.meta.env.VITE_ANTHROPIC_API_KEY,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-calls":"true"},
-          body:JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:1000,
-            messages:[{role:"user",content:[
-              {type:"image",source:{type:"base64",media_type:file.type,data:base64}},
-              {type:"text",text:`Analizza documento di identità, rispondi SOLO con JSON (no backtick):
-{"cognome":"","nome":"","sesso":"M o F","dataNascita":"YYYY-MM-DD","comuneNascita":"","provinciaNascita":"sigla 2L","statoNascita":"PAESE MAIUSCOLO","cittadinanza":"PAESE MAIUSCOLO","tipoDoc":"CARTA D'IDENTITÀ o PASSAPORTO o PATENTE","numDoc":"","luogoRilascio":""}`}
-            ]}]
-          })
-        });
-        const data = await res.json();
-        const text = data.content?.map(c=>c.text||"").join("")||"";
-        const parsed = JSON.parse(text.replace(/```json|```/g,"").trim());
+    try {
+      // Carica Tesseract.js dinamicamente
+      const Tesseract = await import("https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.esm.min.js");
+      const { data: { text } } = await Tesseract.recognize(file, "ita+eng", {});
+      const parsed = parseDocumentText(text);
+      if (Object.keys(parsed).length > 0) {
         setBooking(b=>{ const g=[...b.guests]; g[idx]={...g[idx],...parsed}; return {...b,guests:g}; });
-      } catch { /* manual fallback */ }
-      setScanningIdx(null);
-    };
-    reader.readAsDataURL(file);
+      }
+    } catch(err) {
+      console.error("OCR error", err);
+    }
+    setScanningIdx(null);
     e.target.value="";
   }, []);
 
   // ── save ──
-   const handleSave = async () => {
+  const handleSave = async () => {
     const c = findConflict(bookings, booking);
-    if (c) { setConflict(c); return; }
+    if (c) { setConflict(c); return; }   // double-check at save time
     setSaveStatus("saving");
-    // Salva su Google Sheets
-    try {
-      await fetch(SHEETS_URL, {
-        method: "POST",
-        mode: "no-cors",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(booking)
-      });
-    } catch(e) { console.error("Sheets error", e); }
     const b = {...booking, id: booking.id||Date.now().toString(), createdAt: booking.createdAt||new Date().toISOString()};
     const updated = [b, ...bookings.filter(x=>x.id!==b.id)];
     setBookings(updated);
