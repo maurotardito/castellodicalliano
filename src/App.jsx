@@ -288,7 +288,25 @@ export default function CheckInApp() {
 
   // ── booking field helpers ──
   const updB = k => v => setBooking(b => {
-    const updated = {...b, [k]:v};
+    let updated = {...b, [k]:v};
+
+    // Validazione date: checkout non può essere prima o uguale al checkin
+    if (k === "dataPartenza" && updated.dataArrivo && v && v <= updated.dataArrivo) {
+      alert("La data di partenza deve essere successiva alla data di arrivo.");
+      return b; // non aggiornare
+    }
+    if (k === "dataArrivo" && updated.dataPartenza && updated.dataPartenza <= v) {
+      updated = {...updated, dataPartenza: ""}; // resetta partenza se non valida
+    }
+
+    // Calcolo automatico notti
+    if ((k === "dataArrivo" || k === "dataPartenza") && updated.dataArrivo && updated.dataPartenza) {
+      const arrivo = new Date(updated.dataArrivo);
+      const partenza = new Date(updated.dataPartenza);
+      const notti = Math.round((partenza - arrivo) / (1000*60*60*24));
+      if (notti > 0) updated = {...updated, numPernottamenti: String(notti)};
+    }
+
     setConflict(findConflict(bookings, updated));
     return updated;
   });
@@ -392,7 +410,17 @@ export default function CheckInApp() {
     fontWeight: active?600:400, transition:"color 0.2s, border-color 0.2s"
   });
 
-  const capoOk = booking.guests[0]?.cognome && booking.guests[0]?.nome && booking.guests[0]?.dataNascita;
+  const guestOk = (g) => g.cognome && g.nome && g.dataNascita && g.comuneNascita &&
+    g.statoNascita && g.cittadinanza && g.tipoDoc && g.numDoc;
+  const capoOk = booking.guests[0] && guestOk(booking.guests[0]);
+  const allGuestsOk = booking.guests.every(guestOk);
+  const datesOk = !!booking.dataArrivo && !!booking.dataPartenza;
+  const canSave = capoOk && allGuestsOk && datesOk;
+
+  // Messaggio di validazione
+  const validationMsg = !datesOk ? "Inserisci data di arrivo e partenza" :
+    !capoOk ? "Compila tutti i campi del capogruppo (incluso documento)" :
+    !allGuestsOk ? "Compila tutti i campi di ogni ospite" : null;
 
   // years for ISTAT select
   const years = Array.from({length:5},(_,i)=>new Date().getFullYear()-i);
@@ -769,7 +797,7 @@ export default function CheckInApp() {
                 )}
                 <Btn full
                   color={saveStatus==="saved" ? C.green : C.brown}
-                  disabled={!capoOk || saveStatus==="saving" || !!conflict}
+                  disabled={!canSave || saveStatus==="saving" || !!conflict}
                   onClick={handleSave}
                   style={{ fontSize:18, padding:"14px", marginBottom:10 }}>
                   {saveStatus==="saving" ? "Salvataggio…" : saveStatus==="saved" ? "✓ Gruppo salvato!" : "💾 Salva gruppo"}
@@ -778,7 +806,7 @@ export default function CheckInApp() {
                   onClick={() => { setBooking(emptyBooking()); setInsertStep("stay"); setConflict(null); }}>
                   ✕ Annulla
                 </Btn>
-                {!capoOk && <p style={{ textAlign:"center", fontSize:12, color:C.muted, fontFamily:"sans-serif", marginTop:6 }}>Compila almeno cognome, nome e data di nascita del capogruppo</p>}
+                {validationMsg && <p style={{ textAlign:"center", fontSize:12, color:C.muted, fontFamily:"sans-serif", marginTop:6 }}>⚠️ {validationMsg}</p>}
               </div>
             )}
           </>
