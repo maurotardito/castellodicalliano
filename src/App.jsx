@@ -6,8 +6,8 @@ const LOGO_RECT = "data:image/png;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1B
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 const STANZE = [
-  "1.1 Grignolino","1.2 Barbera","1.3 Moscato",
-  "2.1 Ruché","2.2 Freisa","2.3 Malvasia"
+  "1.1 Ruché","1.2 Barbera","1.3 Freisa",
+  "2.1 Grignolino","2.2 Moscato","2.3 Malvasia"
 ];
 
 const NAZIONALITA_MAP = {
@@ -424,55 +424,101 @@ export default function CheckInApp() {
   // years for ISTAT select
   const years = Array.from({length:5},(_,i)=>new Date().getFullYear()-i);
 
-  // ── WuBook import ──
+  // ── WuBook CSV import ──
+  const wbFileRef = useRef();
   const [wbImporting, setWbImporting] = useState(false);
-  const [wbStatus, setWbStatus] = useState(null); // null | "ok" | "error" | "noaccess"
+  const [wbStatus, setWbStatus] = useState(null); // null | "ok:N" | "error"
 
-  const importFromWuBook = async () => {
+  const handleWbCSV = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
     setWbImporting(true); setWbStatus(null);
     try {
-      const dfrom = today();
-      const dto = new Date(Date.now() + 30*24*60*60*1000).toISOString().slice(0,10);
-      const GAS_URL = import.meta.env.VITE_GAS_URL;
-      const res = await fetch(`${GAS_URL}?action=wubook_reservations&dfrom=${dfrom}&dto=${dto}`);
-      const data = await res.json();
+      const text = await file.text();
+      const lines = text.split(/\r?\n/).filter(l => l.trim());
 
-      if (data.error) {
-        setWbStatus("error");
-        console.error("WuBook error:", data.error);
-        return;
-      }
-      if (!data.data || data.data.length === 0) {
-        setWbStatus("ok");
-        return;
-      }
+      // Parse CSV con campi quotati
+      const parseRow = line => line.split(";").map(f => f.replace(/^"|"$/g,"").trim());
+      const headers = parseRow(lines[0]);
+      const idx = k => headers.indexOf(k);
 
-      // Mappa le prenotazioni WuBook → formato app
+      const COUNTRY_TO_IT = {
+        "IT":"ITALIA","DE":"GERMANIA","FR":"FRANCIA","CH":"SVIZZERA","GB":"REGNO UNITO",
+        "NL":"PAESI BASSI","BE":"BELGIO","AT":"AUSTRIA","US":"STATI UNITI","ES":"SPAGNA",
+        "NO":"NORVEGIA","SE":"SVEZIA","DK":"DANIMARCA","FI":"FINLANDIA","HR":"CROAZIA",
+        "HU":"UNGHERIA","BR":"BRASILE","CA":"CANADA","AU":"AUSTRALIA","VN":"VIETNAM",
+        "KR":"COREA DEL SUD","TH":"TAILANDIA","IL":"ISRAELE","SG":"SINGAPORE",
+        "MC":"MONACO","AE":"EMIRATI ARABI"
+      };
+      const parseDateWb = d => {
+        if (!d) return "";
+        const [dd,mm,yyyy] = d.split("/");
+        return `${yyyy}-${mm}-${dd}`;
+      };
+
+      // Mappa stanze WuBook → stanze app (match per numero es. "1.1")
+      const mapStanza = roomName => {
+        if (!roomName) return "";
+        const match = roomName.match(/\d+\.\d+/);
+        if (match) {
+          const found = STANZE.find(s => s.startsWith(match[0]));
+          if (found) return found;
+        }
+        return roomName;
+      };
+
+      let imported = 0;
       const newBookings = [];
-      for (const res of data.data) {
-        const stanzaWb = res.room_name || res.room || "";
-        // Cerca stanza corrispondente (per nome parziale)
-        const stanza = STANZE.find(s => s.toLowerCase().includes(stanzaWb.toLowerCase()))
-                    || stanzaWb;
-        const existing = bookings.find(b =>
-          b.stanza === stanza &&
-          b.dataArrivo === res.dfrom &&
-          b.guests[0]?.cognome?.toLowerCase() === (res.customer_surname||"").toLowerCase()
-        );
-        if (existing) continue; // già presente, salta
+      const seen = new Set(bookings.map(b => b._wbCode));
+
+      for (const line of lines.slice(1)) {
+        const r = parseRow(line);
+        const rowType = r[idx("Row Type")];
+        if (rowType !== "ROOM") continue; // salta righe TOTAL
+
+        const code    = r[idx("Code")];
+        const status  = r[idx("Status")];
+        if (!status || status === "Cancelled" || status === "Cancellata") continue;
+        if (seen.has(code)) continue;
+        seen.add(code);
+
+        const booker   = r[idx("Booker")] || "";
+        const country  = r[idx("Country")] || "";
+        const from     = r[idx("From")];
+        const to       = r[idx("To")];
+        const nights   = r[idx("Nights")];
+        const roomName = r[idx("Room Name")] || "";
+        const agency   = r[idx("Agency")] || "";
+
+        if (!booker || !from || !to) continue;
+
+        // Split booker in nome/cognome (assume "Nome Cognome")
+        const parts = booker.trim().split(" ");
+        const nome    = parts[0] || "";
+        const cognome = parts.slice(1).join(" ") || "";
+
+        const cittadinanza = COUNTRY_TO_IT[country] || (country ? country : "");
+        const stanza = mapStanza(roomName);
+        const dataArrivo  = parseDateWb(from);
+        const dataPartenza = parseDateWb(to);
 
         const guest = {
           ...emptyPerson(),
-          cognome: res.customer_surname || "",
-          nome: res.customer_name || "",
+          nome: nome.charAt(0).toUpperCase()+nome.slice(1).toLowerCase(),
+          cognome: cognome.charAt(0).toUpperCase()+cognome.slice(1).toLowerCase(),
+          cittadinanza,
+          statoNascita: cittadinanza,
         };
         newBookings.push({
-          id: `wb_${res.id || Date.now()}_${Math.random()}`,
-          stanza, dataArrivo: res.dfrom, dataPartenza: res.dto,
-          numPernottamenti: res.nights || "",
+          id: `wb_${code}_${Date.now()}_${imported}`,
+          _wbCode: code,
+          stanza,
+          dataArrivo, dataPartenza,
+          numPernottamenti: nights || "",
           guests: [guest],
           _fromWuBook: true
         });
+        imported++;
       }
 
       if (newBookings.length > 0) {
@@ -480,12 +526,13 @@ export default function CheckInApp() {
         setBookings(merged);
         await saveBookings(merged);
       }
-      setWbStatus("ok");
-    } catch(e) {
-      console.error(e);
+      setWbStatus(`ok:${imported}`);
+    } catch(err) {
+      console.error(err);
       setWbStatus("error");
     } finally {
       setWbImporting(false);
+      e.target.value = "";
     }
   };
 
@@ -504,15 +551,16 @@ export default function CheckInApp() {
               <p style={{ fontSize:11, color:C.muted, margin:0, fontFamily:"sans-serif" }}>Affittacamere · Piemonte</p>
             </div>
             <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-              {/* WuBook sync button */}
-              <button onClick={importFromWuBook} disabled={wbImporting} title="Importa prenotazioni da WuBook" style={{
-                background: wbStatus==="ok" ? C.green+"33" : wbStatus==="error" ? C.red+"33" : "#ffffff18",
-                border: `1px solid ${wbStatus==="ok" ? C.green+"66" : wbStatus==="error" ? C.red+"66" : "#ffffff33"}`,
+              {/* WuBook CSV import */}
+              <input ref={wbFileRef} type="file" accept=".csv" onChange={handleWbCSV} style={{display:"none"}} />
+              <button onClick={()=>wbFileRef.current.click()} disabled={wbImporting} title="Importa CSV da WuBook" style={{
+                background: wbStatus?.startsWith("ok") ? C.green+"33" : wbStatus==="error" ? C.red+"33" : "#ffffff18",
+                border: `1px solid ${wbStatus?.startsWith("ok") ? C.green+"66" : wbStatus==="error" ? C.red+"66" : "#ffffff33"}`,
                 borderRadius:8, padding:"6px 10px", cursor:"pointer",
-                color: wbStatus==="ok" ? "#7ecf7e" : wbStatus==="error" ? "#f08080" : "#ccc",
-                fontSize:12, fontFamily:"sans-serif", display:"flex", alignItems:"center", gap:5
+                color: wbStatus?.startsWith("ok") ? "#7ecf7e" : wbStatus==="error" ? "#f08080" : "#ccc",
+                fontSize:12, fontFamily:"sans-serif", display:"flex", alignItems:"center", gap:5, whiteSpace:"nowrap"
               }}>
-                {wbImporting ? "⏳" : wbStatus==="ok" ? "✓" : wbStatus==="error" ? "⚠️" : "🔄"}&nbsp;WuBook
+                {wbImporting ? "⏳" : wbStatus?.startsWith("ok") ? `✓ +${wbStatus.split(":")[1]}` : wbStatus==="error" ? "⚠️ Errore" : "📥 WuBook"}
               </button>
               <img src={LOGO_RECT} alt="Castello di Calliano" style={{ height:48, width:"auto", objectFit:"contain", flexShrink:0 }} />
             </div>
@@ -563,6 +611,8 @@ export default function CheckInApp() {
               const getBookingFor = (stanza, day) =>
                 bookings.find(b => b.stanza === stanza &&
                   (b.dataArrivo||FAR) <= day && (!b.dataPartenza || b.dataPartenza > day));
+              // Controlla se tutti gli ospiti hanno documento caricato
+              const hasDoc = bk => bk && bk.guests.every(g => g.numDoc && g.numDoc.trim());
               const dayNames = ["D","L","M","M","G","V","S"];
               const todayStr = today();
               return (
@@ -582,9 +632,10 @@ export default function CheckInApp() {
                   </div>
 
                   {/* Legenda */}
-                  <div style={{ display:"flex", gap:14, marginBottom:14, fontSize:12, fontFamily:"sans-serif", color:C.muted }}>
-                    <span><span style={{ display:"inline-block", width:12, height:12, borderRadius:3, background:"#5a9a5a", marginRight:4, verticalAlign:"middle" }}/>Libera</span>
-                    <span><span style={{ display:"inline-block", width:12, height:12, borderRadius:3, background:"#c45a5a", marginRight:4, verticalAlign:"middle" }}/>Occupata</span>
+                  <div style={{ display:"flex", gap:14, marginBottom:14, fontSize:12, fontFamily:"sans-serif", color:C.muted, flexWrap:"wrap" }}>
+                    <span><span style={{ display:"inline-block", width:12, height:12, borderRadius:3, background:"#c45a5a", marginRight:4, verticalAlign:"middle" }}/>Libera</span>
+                    <span><span style={{ display:"inline-block", width:12, height:12, borderRadius:3, background:"#5a9a5a", marginRight:4, verticalAlign:"middle" }}/>Occupata · doc mancante</span>
+                    <span><span style={{ display:"inline-block", width:12, height:12, borderRadius:3, background:"#999", marginRight:4, verticalAlign:"middle" }}/>Occupata · doc ok</span>
                   </div>
 
                   {/* Header giorni */}
@@ -613,11 +664,13 @@ export default function CheckInApp() {
                         const occ = isOccupied(stanza, d);
                         const bk = occ ? getBookingFor(stanza, d) : null;
                         const isToday = d === todayStr;
+                        const cellColor = !occ ? "#c45a5a" : hasDoc(bk) ? "#999" : "#5a9a5a";
+                        const tooltip = bk ? `${bk.guests[0]?.cognome} ${bk.guests[0]?.nome}${hasDoc(bk) ? " · doc ok" : " · doc mancante"}` : "Libera";
                         return (
-                          <div key={d} title={bk ? `${bk.guests[0]?.cognome} ${bk.guests[0]?.nome}` : "Libera"}
+                          <div key={d} title={tooltip}
                             style={{
                               height:28, borderRadius:4,
-                              background: occ ? "#c45a5a" : "#5a9a5a",
+                              background: cellColor,
                               border: isToday ? `1.5px solid ${C.brown}` : "none",
                               cursor: occ ? "pointer" : "default",
                               opacity: 0.85
@@ -628,7 +681,7 @@ export default function CheckInApp() {
                   ))}
 
                   <p style={{ fontSize:11, color:C.faint, fontFamily:"sans-serif", marginTop:12, textAlign:"center" }}>
-                    Passa il mouse su un quadrato rosso per vedere il nome dell'ospite
+                    Passa il mouse su un quadrato per vedere il nome dell'ospite
                   </p>
                 </div>
               );
