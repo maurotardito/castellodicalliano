@@ -402,16 +402,16 @@ export default function CheckInApp() {
       <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Crimson+Pro:wght@300;400;600&display=swap" rel="stylesheet" />
 
       {/* ── HEADER ── */}
-      <div style={{ background:C.dark, padding:"18px 20px 0" }}>
+      <div style={{ background:"#000", padding:"18px 20px 0" }}>
         <div style={{ maxWidth:640, margin:"0 auto" }}>
-          <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:14 }}>
-            <img src={LOGO_ROUND} alt="Logo" style={{ width:52, height:52, borderRadius:"50%", objectFit:"cover", flexShrink:0 }} />
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14 }}>
             <div>
               <h1 style={{ fontFamily:"'Cormorant Garamond', serif", fontSize:20, fontWeight:700, margin:0, color:"#f5efe4", letterSpacing:"0.02em" }}>
                 Check-In Manager
               </h1>
-              <p style={{ fontSize:11, color:C.muted, margin:0, fontFamily:"sans-serif" }}>Castello di Calliano Monferrato</p>
+              <p style={{ fontSize:11, color:C.muted, margin:0, fontFamily:"sans-serif" }}>Affittacamere · Piemonte</p>
             </div>
+            <img src={LOGO_RECT} alt="Castello di Calliano" style={{ height:48, width:"auto", objectFit:"contain", flexShrink:0 }} />
             {bookings.length>0 && (
               <div style={{ marginLeft:"auto", background:C.brown+"cc", borderRadius:20, padding:"3px 12px", fontSize:12, fontFamily:"sans-serif", color:"#fff" }}>
                 {bookings.reduce((s,b)=>s+b.guests.length,0)} ospiti · {bookings.length} soggiorni
@@ -419,7 +419,7 @@ export default function CheckInApp() {
             )}
           </div>
           {/* 3-tab nav */}
-          <div style={{ display:"flex", borderTop:`1px solid #3e3020` }}>
+          <div style={{ display:"flex", borderTop:`1px solid #222` }}>
             <button style={navTab(tab==="analisi")}    onClick={()=>setTab("analisi")}>📊 Analisi Dati</button>
             <button style={navTab(tab==="inserimento")} onClick={()=>setTab("inserimento")}>＋ Inserimento</button>
             <button style={navTab(tab==="esporta")}    onClick={()=>setTab("esporta")}>📤 Esporta</button>
