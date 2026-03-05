@@ -18,7 +18,7 @@ const NAZIONALITA_MAP = {
   "GIAPPONE":"100000392","BRASILE":"100000076","ARGENTINA":"100000032",
 };
 const TIPO_DOC_MAP = { "CARTA D'IDENTITÀ":"CI","PASSAPORTO":"PP","PATENTE":"PD" };
-const ISTAT_HEADERS = "COGNOME;NOME;SESSO;DATA_NASCITA;COMUNE_NASCITA;PROVINCIA_NASCITA;STATO_NASCITA;CITTADINANZA;TIPO_DOCUMENTO;NUMERO_DOCUMENTO;LUOGO_RILASCIO;DATA_ARRIVO;DATA_PARTENZA;NUM_PERNOTTAMENTI;STANZA;RUOLO";
+const ISTAT_HEADERS = "COGNOME;NOME;SESSO;DATA_NASCITA;COMUNE_NASCITA;PROVINCIA_NASCITA;STATO_NASCITA;CITTADINANZA;TIPO_DOCUMENTO;NUMERO_DOCUMENTO;LUOGO_RILASCIO;DATA_ARRIVO;DATA_PARTENZA;NUM_PERNOTTAMENTI";
 
 const MONTHS_IT = ["Gennaio","Febbraio","Marzo","Aprile","Maggio","Giugno","Luglio","Agosto","Settembre","Ottobre","Novembre","Dicembre"];
 const today = () => new Date().toISOString().split("T")[0];
@@ -87,12 +87,11 @@ function alloggiatiLine(person, booking, isCapo) {
 function istatRow(person, booking, isCapo) {
   const d = s => s ? s.split("-").reverse().join("/") : "";
   return [
-    person.cognome,person.nome,person.sesso,d(person.dataNascita),
-    person.comuneNascita,person.provinciaNascita,person.statoNascita,person.cittadinanza,
-    person.tipoDoc,person.numDoc,person.luogoRilascio,
-    d(booking.dataArrivo),d(booking.dataPartenza),
-    booking.numPernottamenti,booking.stanza,
-    isCapo?"Capogruppo":"Accompagnatore"
+    person.cognome, person.nome, person.sesso, d(person.dataNascita),
+    person.comuneNascita, person.provinciaNascita, person.statoNascita, person.cittadinanza,
+    person.tipoDoc, person.numDoc, person.luogoRilascio,
+    d(booking.dataArrivo), d(booking.dataPartenza),
+    booking.numPernottamenti
   ].join(";");
 }
 
