@@ -128,7 +128,7 @@ const Btn = ({ children, onClick, color=C.brown, textColor="#fff", outline=false
 );
 
 function Field({ label, value, onChange, type="text", options, span }) {
-  const s = { width:"100%", padding:"8px 12px", border:`1px solid ${C.border}`, borderRadius:7, fontFamily:"'Crimson Pro', serif", fontSize:15, background:C.cream, color:C.dark, outline:"none", boxSizing:"border-box" };
+  const s = { width:"100%", padding:"7px 8px", border:`1px solid ${C.border}`, borderRadius:7, fontFamily:"'Crimson Pro', serif", fontSize:14, background:C.cream, color:C.dark, outline:"none", boxSizing:"border-box" };
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:4, gridColumn:span?"span 2":undefined }}>
       <label style={{ fontSize:10, textTransform:"uppercase", letterSpacing:"0.12em", color:C.muted, fontFamily:"sans-serif" }}>{label}</label>
@@ -693,10 +693,10 @@ export default function CheckInApp() {
                 </div>
 
                 {/* Date */}
-                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:22 }}>
-                  <Field label="Data arrivo" value={booking.dataArrivo} onChange={updB("dataArrivo")} type="date" />
-                  <Field label="Data partenza" value={booking.dataPartenza} onChange={updB("dataPartenza")} type="date" />
-                  <Field label="Pernottamenti" value={booking.numPernottamenti} onChange={updB("numPernottamenti")} type="number" />
+                <div style={{ display:"grid", gridTemplateColumns:"5fr 5fr 3fr", gap:8, marginBottom:22 }}>
+                  <Field label="Arrivo" value={booking.dataArrivo} onChange={updB("dataArrivo")} type="date" />
+                  <Field label="Partenza" value={booking.dataPartenza} onChange={updB("dataPartenza")} type="date" />
+                  <Field label="Notti" value={booking.numPernottamenti} onChange={updB("numPernottamenti")} type="number" />
                 </div>
 
                 {/* Conflict warning */}
@@ -812,22 +812,20 @@ export default function CheckInApp() {
                   Seleziona la data di arrivo. Verranno inclusi tutti i soggiorni con check-in in quella data.
                 </p>
 
-                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:16 }}>
+                <div style={{ display:"flex", flexDirection:"column", gap:10, marginBottom:16 }}>
                   <div>
                     <label style={{ fontSize:11, textTransform:"uppercase", letterSpacing:"0.12em", color:C.muted, fontFamily:"sans-serif", display:"block", marginBottom:6 }}>Data di arrivo</label>
                     <input type="date" value={expDate} onChange={e=>setExpDate(e.target.value)}
                       style={{ width:"100%", padding:"10px 12px", border:`1px solid ${C.border}`, borderRadius:8, fontFamily:"'Crimson Pro', serif", fontSize:15, background:C.cream, color:C.dark, outline:"none", boxSizing:"border-box" }} />
                   </div>
-                  <div style={{ display:"flex", flexDirection:"column", justifyContent:"flex-end" }}>
-                    <button onClick={()=>setFilterNonExp(f=>!f)} style={{
-                      width:"100%", padding:"10px 8px", border:`1.5px solid ${filterNonExp?C.brown:C.border}`,
-                      borderRadius:8, background:filterNonExp?C.brown+"10":"#fff",
-                      color:filterNonExp?C.brown:C.muted, fontFamily:"sans-serif", fontSize:12,
-                      cursor:"pointer", textAlign:"center"
-                    }}>
-                      {filterNonExp ? "✓ Solo da esportare" : "Tutti i soggiorni"}
-                    </button>
-                  </div>
+                  <button onClick={()=>setFilterNonExp(f=>!f)} style={{
+                    width:"100%", padding:"10px", border:`1.5px solid ${filterNonExp?C.brown:C.border}`,
+                    borderRadius:8, background:filterNonExp?C.brown+"10":"#fff",
+                    color:filterNonExp?C.brown:C.muted, fontFamily:"sans-serif", fontSize:13,
+                    cursor:"pointer", textAlign:"center"
+                  }}>
+                    {filterNonExp ? "✓ Solo da esportare" : "Tutti i soggiorni"}
+                  </button>
                 </div>
 
                 {/* Lista soggiorni con flag */}
