@@ -424,6 +424,71 @@ export default function CheckInApp() {
   // years for ISTAT select
   const years = Array.from({length:5},(_,i)=>new Date().getFullYear()-i);
 
+  // ── WuBook import ──
+  const [wbImporting, setWbImporting] = useState(false);
+  const [wbStatus, setWbStatus] = useState(null); // null | "ok" | "error" | "noaccess"
+
+  const importFromWuBook = async () => {
+    setWbImporting(true); setWbStatus(null);
+    try {
+      const dfrom = today();
+      const dto = new Date(Date.now() + 30*24*60*60*1000).toISOString().slice(0,10);
+      const GAS_URL = import.meta.env.VITE_GAS_URL;
+      const res = await fetch(`${GAS_URL}?action=wubook_reservations&dfrom=${dfrom}&dto=${dto}`);
+      const data = await res.json();
+
+      if (data.error) {
+        setWbStatus("error");
+        console.error("WuBook error:", data.error);
+        return;
+      }
+      if (!data.data || data.data.length === 0) {
+        setWbStatus("ok");
+        return;
+      }
+
+      // Mappa le prenotazioni WuBook → formato app
+      const newBookings = [];
+      for (const res of data.data) {
+        const stanzaWb = res.room_name || res.room || "";
+        // Cerca stanza corrispondente (per nome parziale)
+        const stanza = STANZE.find(s => s.toLowerCase().includes(stanzaWb.toLowerCase()))
+                    || stanzaWb;
+        const existing = bookings.find(b =>
+          b.stanza === stanza &&
+          b.dataArrivo === res.dfrom &&
+          b.guests[0]?.cognome?.toLowerCase() === (res.customer_surname||"").toLowerCase()
+        );
+        if (existing) continue; // già presente, salta
+
+        const guest = {
+          ...emptyPerson(),
+          cognome: res.customer_surname || "",
+          nome: res.customer_name || "",
+        };
+        newBookings.push({
+          id: `wb_${res.id || Date.now()}_${Math.random()}`,
+          stanza, dataArrivo: res.dfrom, dataPartenza: res.dto,
+          numPernottamenti: res.nights || "",
+          guests: [guest],
+          _fromWuBook: true
+        });
+      }
+
+      if (newBookings.length > 0) {
+        const merged = [...bookings, ...newBookings];
+        setBookings(merged);
+        await saveBookings(merged);
+      }
+      setWbStatus("ok");
+    } catch(e) {
+      console.error(e);
+      setWbStatus("error");
+    } finally {
+      setWbImporting(false);
+    }
+  };
+
   return (
     <div style={{ minHeight:"100vh", background:C.light, fontFamily:"'Crimson Pro', serif" }}>
       <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Crimson+Pro:wght@300;400;600&display=swap" rel="stylesheet" />
@@ -438,12 +503,19 @@ export default function CheckInApp() {
               </h1>
               <p style={{ fontSize:11, color:C.muted, margin:0, fontFamily:"sans-serif" }}>Affittacamere · Piemonte</p>
             </div>
-            <img src={LOGO_RECT} alt="Castello di Calliano" style={{ height:48, width:"auto", objectFit:"contain", flexShrink:0 }} />
-            {bookings.length>0 && (
-              <div style={{ marginLeft:"auto", background:C.brown+"cc", borderRadius:20, padding:"3px 12px", fontSize:12, fontFamily:"sans-serif", color:"#fff" }}>
-                {bookings.reduce((s,b)=>s+b.guests.length,0)} ospiti · {bookings.length} soggiorni
-              </div>
-            )}
+            <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+              {/* WuBook sync button */}
+              <button onClick={importFromWuBook} disabled={wbImporting} title="Importa prenotazioni da WuBook" style={{
+                background: wbStatus==="ok" ? C.green+"33" : wbStatus==="error" ? C.red+"33" : "#ffffff18",
+                border: `1px solid ${wbStatus==="ok" ? C.green+"66" : wbStatus==="error" ? C.red+"66" : "#ffffff33"}`,
+                borderRadius:8, padding:"6px 10px", cursor:"pointer",
+                color: wbStatus==="ok" ? "#7ecf7e" : wbStatus==="error" ? "#f08080" : "#ccc",
+                fontSize:12, fontFamily:"sans-serif", display:"flex", alignItems:"center", gap:5
+              }}>
+                {wbImporting ? "⏳" : wbStatus==="ok" ? "✓" : wbStatus==="error" ? "⚠️" : "🔄"}&nbsp;WuBook
+              </button>
+              <img src={LOGO_RECT} alt="Castello di Calliano" style={{ height:48, width:"auto", objectFit:"contain", flexShrink:0 }} />
+            </div>
           </div>
           {/* 3-tab nav */}
           <div style={{ display:"flex", borderTop:`1px solid #333` }}>
