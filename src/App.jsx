@@ -705,7 +705,7 @@ export default function CheckInApp() {
                       const isSelected = booking.stanza === s;
                       // check if this room has any overlap with current dates
                       const testBooking = {...booking, stanza:s};
-                      const roomConflict = findConflict(bookings, testBooking);
+                      const roomConflict = booking.dataPartenza ? findConflict(bookings, testBooking) : null;
                       return (
                         <button key={s} onClick={()=>updB("stanza")(s)}
                           style={{ padding:"12px 8px", border:`2px solid ${isSelected ? C.brown : roomConflict ? C.red+"88" : C.border}`, borderRadius:10, background: isSelected ? C.brown+"10" : roomConflict ? "#fdf0f0" : "#fff", color: isSelected ? C.brown : roomConflict ? C.red : C.mid, fontFamily:"'Cormorant Garamond', serif", fontSize:14, cursor:"pointer", transition:"all 0.2s", fontWeight: isSelected ? 600 : 400, textAlign:"center", position:"relative" }}>
