@@ -259,14 +259,23 @@ export default function CheckInApp() {
   const [scanningIdx, setScanningIdx] = useState(null);
   const [bookings, setBookings] = useState([]);
   const [dbLoading, setDbLoading]   = useState(true);
-  const [saveStatus, setSaveStatus] = useState("idle");    // idle | saving | saved
-  const [conflict, setConflict]     = useState(null);       // conflicting booking or null
+  const [saveStatus, setSaveStatus] = useState("idle");
+  const [conflict, setConflict]     = useState(null);
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
+  const [analisiTab, setAnalisiTab] = useState("occupazione"); // occupazione | ricerca
+  // ricerca filters
+  const [ricercaStanza, setRicercaStanza] = useState("");
+  const [ricercaCognome, setRicercaCognome] = useState("");
+  const [ricercaData, setRicercaData] = useState("");
+  // occupazione: settimana visualizzata
+  const [occOffset, setOccOffset] = useState(0); // settimane dal oggi
 
   // export filters
-  const [expType, setExpType]   = useState("questura");    // questura | istat
-  const [expDate, setExpDate]   = useState(today());       // for questura
+  const [expType, setExpType]   = useState("questura");
+  const [expDate, setExpDate]   = useState(today());
   const [expYear, setExpYear]   = useState(new Date().getFullYear());
-  const [expMonth, setExpMonth] = useState(new Date().getMonth());  // 0-based
+  const [expMonth, setExpMonth] = useState(new Date().getMonth());
+  const [filterNonExp, setFilterNonExp] = useState(false); // mostra solo non esportati
 
   const fileRef   = useRef();
   const scanIdx   = useRef(null);
@@ -293,8 +302,9 @@ export default function CheckInApp() {
     reader.onload = async ev => {
       try {
         const base64 = ev.target.result.split(",")[1];
+        const apiKey = (typeof window !== 'undefined' && window.__ANTHROPIC_KEY__) || "";
         const res = await fetch("https://api.anthropic.com/v1/messages",{
-          method:"POST", headers:{"Content-Type":"application/json","x-api-key":import.meta.env.VITE_ANTHROPIC_API_KEY,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-calls":"true"},
+          method:"POST", headers:{"Content-Type":"application/json","x-api-key":apiKey,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-calls":"true"},
           body:JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:1000,
             messages:[{role:"user",content:[
               {type:"image",source:{type:"base64",media_type:file.type,data:base64}},
@@ -332,24 +342,41 @@ export default function CheckInApp() {
     setBookings(updated); await saveBookings(updated);
   };
 
+  const toggleFlag = async (id, field) => {
+    const updated = bookings.map(b => b.id===id ? {...b, [field]:!b[field]} : b);
+    setBookings(updated); await saveBookings(updated);
+  };
+
   // ── export helpers ──
-  const bookingsForDate = bookings.filter(b => b.dataArrivo === expDate);
+  const bookingsForDate = bookings.filter(b => {
+    const dateOk = b.dataArrivo === expDate;
+    const flagOk = !filterNonExp || !b.expQuestura;
+    return dateOk && flagOk;
+  });
   const bookingsForMonth = bookings.filter(b => {
     if(!b.dataArrivo) return false;
     const [y,m] = b.dataArrivo.split("-").map(Number);
-    return y===expYear && m-1===expMonth;
+    const monthOk = y===expYear && m-1===expMonth;
+    const flagOk = !filterNonExp || !b.expISTAT;
+    return monthOk && flagOk;
   });
 
-  const exportQuestura = () => {
+  const exportQuestura = async () => {
     const lines = bookingsForDate.flatMap(b=>b.guests.map((p,i)=>alloggiatiLine(p,b,i===0)));
     if(!lines.length){ alert("Nessun soggiorno trovato per la data selezionata."); return; }
     downloadFile(lines.join("\r\n"), `alloggiati_${expDate}.txt`, "text/plain");
+    // segna come esportati
+    const updated = bookings.map(b => bookingsForDate.find(x=>x.id===b.id) ? {...b, expQuestura:true} : b);
+    setBookings(updated); await saveBookings(updated);
   };
 
-  const exportISTAT = () => {
+  const exportISTAT = async () => {
     const rows = bookingsForMonth.flatMap(b=>b.guests.map((p,i)=>istatRow(p,b,i===0)));
     if(!rows.length){ alert(`Nessun soggiorno trovato per ${MONTHS_IT[expMonth]} ${expYear}.`); return; }
     downloadFile(ISTAT_HEADERS+"\r\n"+rows.join("\r\n"), `istat_${expYear}_${String(expMonth+1).padStart(2,"0")}.csv`, "text/csv");
+    // segna come esportati
+    const updated = bookings.map(b => bookingsForMonth.find(x=>x.id===b.id) ? {...b, expISTAT:true} : b);
+    setBookings(updated); await saveBookings(updated);
   };
 
   // ── nav style ──
@@ -400,13 +427,219 @@ export default function CheckInApp() {
 
         {/* ══ ANALISI DATI ══════════════════════════════════════════════════ */}
         {tab==="analisi" && (
-          <div style={{ ...cardStyle, textAlign:"center", padding:60 }}>
-            <div style={{ fontSize:48, marginBottom:16 }}>📊</div>
-            <h2 style={{ fontFamily:"'Cormorant Garamond', serif", fontSize:26, color:C.dark, margin:"0 0 10px" }}>Analisi Dati</h2>
-            <p style={{ color:C.muted, fontSize:15, lineHeight:1.7, maxWidth:340, margin:"0 auto" }}>
-              Questa sezione sarà disponibile prossimamente.<br/>
-              Grafici presenze, nazionalità, occupazione per stanza e statistiche mensili.
-            </p>
+          <div>
+            {/* sub-nav */}
+            <div style={{ display:"flex", background:"#e2d8cc", borderRadius:10, padding:3, marginBottom:18 }}>
+              {[["occupazione","🗓 Occupazione"],["ricerca","🔍 Ricerca"]].map(([v,label])=>(
+                <button key={v} onClick={()=>setAnalisiTab(v)} style={{
+                  flex:1, padding:"9px 4px", border:"none", borderRadius:8,
+                  background:analisiTab===v?"#fff":"transparent",
+                  color:analisiTab===v?C.dark:C.muted,
+                  fontFamily:"'Cormorant Garamond', serif", fontSize:15,
+                  cursor:"pointer", fontWeight:analisiTab===v?600:400,
+                  boxShadow:analisiTab===v?"0 1px 6px rgba(0,0,0,0.1)":"none",
+                  transition:"all 0.2s"
+                }}>{label}</button>
+              ))}
+            </div>
+
+            {/* ── OCCUPAZIONE STANZE ── */}
+            {analisiTab==="occupazione" && (() => {
+              // Genera 14 giorni a partire da (oggi + offset*14)
+              const base = new Date();
+              base.setDate(base.getDate() + occOffset * 14);
+              const days = Array.from({length:14}, (_,i) => {
+                const d = new Date(base);
+                d.setDate(base.getDate() + i);
+                return d.toISOString().split("T")[0];
+              });
+              const FAR = "9999-12-31";
+              const isOccupied = (stanza, day) =>
+                bookings.some(b => b.stanza === stanza &&
+                  (b.dataArrivo||FAR) <= day && (!b.dataPartenza || b.dataPartenza > day));
+              const getBookingFor = (stanza, day) =>
+                bookings.find(b => b.stanza === stanza &&
+                  (b.dataArrivo||FAR) <= day && (!b.dataPartenza || b.dataPartenza > day));
+              const dayNames = ["D","L","M","M","G","V","S"];
+              const todayStr = today();
+              return (
+                <div style={cardStyle}>
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+                    <h2 style={{ fontFamily:"'Cormorant Garamond', serif", fontSize:20, color:C.dark, margin:0 }}>
+                      Occupazione Stanze
+                    </h2>
+                    <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+                      <button onClick={()=>setOccOffset(o=>o-1)}
+                        style={{ background:C.cream, border:`1px solid ${C.border}`, borderRadius:6, padding:"4px 10px", cursor:"pointer", fontSize:16, color:C.mid }}>‹</button>
+                      <button onClick={()=>setOccOffset(0)}
+                        style={{ background:occOffset===0?C.brown:C.cream, border:`1px solid ${occOffset===0?C.brown:C.border}`, borderRadius:6, padding:"4px 10px", cursor:"pointer", fontSize:12, color:occOffset===0?"#fff":C.mid, fontFamily:"sans-serif" }}>Oggi</button>
+                      <button onClick={()=>setOccOffset(o=>o+1)}
+                        style={{ background:C.cream, border:`1px solid ${C.border}`, borderRadius:6, padding:"4px 10px", cursor:"pointer", fontSize:16, color:C.mid }}>›</button>
+                    </div>
+                  </div>
+
+                  {/* Legenda */}
+                  <div style={{ display:"flex", gap:14, marginBottom:14, fontSize:12, fontFamily:"sans-serif", color:C.muted }}>
+                    <span><span style={{ display:"inline-block", width:12, height:12, borderRadius:3, background:"#5a9a5a", marginRight:4, verticalAlign:"middle" }}/>Libera</span>
+                    <span><span style={{ display:"inline-block", width:12, height:12, borderRadius:3, background:"#c45a5a", marginRight:4, verticalAlign:"middle" }}/>Occupata</span>
+                  </div>
+
+                  {/* Header giorni */}
+                  <div style={{ display:"grid", gridTemplateColumns:"90px repeat(14, 1fr)", gap:2, marginBottom:4 }}>
+                    <div />
+                    {days.map(d => {
+                      const isToday = d === todayStr;
+                      const dayNum = new Date(d).getDate();
+                      const dayName = dayNames[new Date(d).getDay()];
+                      return (
+                        <div key={d} style={{ textAlign:"center", fontSize:10, fontFamily:"sans-serif", color: isToday ? C.brown : C.muted, fontWeight: isToday ? 700 : 400 }}>
+                          <div>{dayName}</div>
+                          <div>{dayNum}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Righe stanze */}
+                  {STANZE.map(stanza => (
+                    <div key={stanza} style={{ display:"grid", gridTemplateColumns:"90px repeat(14, 1fr)", gap:2, marginBottom:3 }}>
+                      <div style={{ fontSize:12, fontFamily:"sans-serif", color:C.dark, display:"flex", alignItems:"center", paddingRight:6, fontWeight:500 }}>
+                        {stanza}
+                      </div>
+                      {days.map(d => {
+                        const occ = isOccupied(stanza, d);
+                        const bk = occ ? getBookingFor(stanza, d) : null;
+                        const isToday = d === todayStr;
+                        return (
+                          <div key={d} title={bk ? `${bk.guests[0]?.cognome} ${bk.guests[0]?.nome}` : "Libera"}
+                            style={{
+                              height:28, borderRadius:4,
+                              background: occ ? "#c45a5a" : "#5a9a5a",
+                              border: isToday ? `1.5px solid ${C.brown}` : "none",
+                              cursor: occ ? "pointer" : "default",
+                              opacity: 0.85
+                            }} />
+                        );
+                      })}
+                    </div>
+                  ))}
+
+                  <p style={{ fontSize:11, color:C.faint, fontFamily:"sans-serif", marginTop:12, textAlign:"center" }}>
+                    Passa il mouse su un quadrato rosso per vedere il nome dell'ospite
+                  </p>
+                </div>
+              );
+            })()}
+
+            {/* ── RICERCA SOGGIORNO ── */}
+            {analisiTab==="ricerca" && (() => {
+              const risultati = bookings.filter(b => {
+                const stanzaOk = !ricercaStanza || b.stanza === ricercaStanza;
+                const cognomeOk = !ricercaCognome || b.guests.some(g =>
+                  g.cognome.toLowerCase().includes(ricercaCognome.toLowerCase()) ||
+                  g.nome.toLowerCase().includes(ricercaCognome.toLowerCase())
+                );
+                const dataOk = !ricercaData || (b.dataArrivo <= ricercaData && (!b.dataPartenza || b.dataPartenza >= ricercaData));
+                return stanzaOk && cognomeOk && dataOk;
+              });
+              return (
+                <div>
+                  <div style={cardStyle}>
+                    <h2 style={{ fontFamily:"'Cormorant Garamond', serif", fontSize:20, color:C.dark, marginTop:0, marginBottom:16 }}>
+                      Ricerca Soggiorno
+                    </h2>
+                    <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:16 }}>
+                      {/* Stanza */}
+                      <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+                        <label style={{ fontSize:10, textTransform:"uppercase", letterSpacing:"0.12em", color:C.muted, fontFamily:"sans-serif" }}>Stanza</label>
+                        <select value={ricercaStanza} onChange={e=>setRicercaStanza(e.target.value)}
+                          style={{ padding:"8px 12px", border:`1px solid ${C.border}`, borderRadius:7, fontFamily:"'Crimson Pro', serif", fontSize:15, background:C.cream, color:C.dark, outline:"none" }}>
+                          <option value="">Tutte le stanze</option>
+                          {STANZE.map(s=><option key={s} value={s}>{s}</option>)}
+                        </select>
+                      </div>
+                      {/* Data */}
+                      <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+                        <label style={{ fontSize:10, textTransform:"uppercase", letterSpacing:"0.12em", color:C.muted, fontFamily:"sans-serif" }}>Data</label>
+                        <input type="date" value={ricercaData} onChange={e=>setRicercaData(e.target.value)}
+                          style={{ padding:"8px 12px", border:`1px solid ${C.border}`, borderRadius:7, fontFamily:"'Crimson Pro', serif", fontSize:15, background:C.cream, color:C.dark, outline:"none" }} />
+                      </div>
+                      {/* Cognome */}
+                      <div style={{ display:"flex", flexDirection:"column", gap:4, gridColumn:"span 2" }}>
+                        <label style={{ fontSize:10, textTransform:"uppercase", letterSpacing:"0.12em", color:C.muted, fontFamily:"sans-serif" }}>Cognome / Nome ospite</label>
+                        <input type="text" value={ricercaCognome} onChange={e=>setRicercaCognome(e.target.value)}
+                          placeholder="es. Rossi"
+                          style={{ padding:"8px 12px", border:`1px solid ${C.border}`, borderRadius:7, fontFamily:"'Crimson Pro', serif", fontSize:15, background:C.cream, color:C.dark, outline:"none" }} />
+                      </div>
+                    </div>
+                    {(ricercaStanza||ricercaCognome||ricercaData) && (
+                      <button onClick={()=>{ setRicercaStanza(""); setRicercaCognome(""); setRicercaData(""); }}
+                        style={{ background:"transparent", border:"none", color:C.muted, fontFamily:"sans-serif", fontSize:13, cursor:"pointer", textDecoration:"underline" }}>
+                        ✕ Cancella filtri
+                      </button>
+                    )}
+                  </div>
+
+                  <div style={{ marginTop:14 }}>
+                    {risultati.length===0 ? (
+                      <div style={{...cardStyle, textAlign:"center", padding:36}}>
+                        <div style={{fontSize:32,marginBottom:8}}>🔍</div>
+                        <p style={{fontFamily:"'Cormorant Garamond', serif",fontSize:18,color:C.muted}}>
+                          {(ricercaStanza||ricercaCognome||ricercaData) ? "Nessun risultato trovato" : "Imposta almeno un filtro per cercare"}
+                        </p>
+                      </div>
+                    ) : (
+                      <>
+                        <p style={{ fontSize:13, color:C.muted, fontFamily:"sans-serif", marginBottom:10 }}>
+                          {risultati.length} {risultati.length===1?"risultato":"risultati"} trovati
+                        </p>
+                        {risultati.map(b => {
+                          const capo = b.guests[0];
+                          return (
+                            <div key={b.id} style={{ background:"#fff", borderRadius:12, border:`1px solid ${C.border}`, marginBottom:10, padding:16 }}>
+                              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:10 }}>
+                                <div>
+                                  <div style={{ fontFamily:"'Cormorant Garamond', serif",fontSize:17,fontWeight:600,color:C.dark }}>
+                                    {capo?.cognome} {capo?.nome}
+                                    {b.guests.length>1 && <span style={{fontSize:13,color:C.muted,fontWeight:400,marginLeft:6}}>+{b.guests.length-1}</span>}
+                                  </div>
+                                  <div style={{ fontSize:12,color:C.muted,fontFamily:"sans-serif",marginTop:2 }}>
+                                    {b.stanza} · {b.dataArrivo} → {b.dataPartenza||"…"} · {b.numPernottamenti} notti
+                                  </div>
+                                </div>
+                              </div>
+                              {b.guests.map((g,i)=>(
+                                <div key={g._pid||i} style={{ display:"flex",alignItems:"center",gap:8,padding:"5px 0",borderTop:`1px solid ${C.light}`,fontSize:13,fontFamily:"sans-serif" }}>
+                                  <span style={{ color:C.muted }}>{i===0?"👤":"👥"}</span>
+                                  <span style={{ color:C.dark,flex:1 }}>{g.cognome} {g.nome}</span>
+                                  <span style={{ color:C.muted }}>{g.dataNascita}</span>
+                                  <span style={{ color:C.muted }}>{g.tipoDoc} {g.numDoc}</span>
+                                </div>
+                              ))}
+                              {deleteConfirm===b.id ? (
+                                <div style={{ marginTop:10, padding:"10px 12px", background:"#fdf5f5", borderRadius:8, display:"flex", alignItems:"center", justifyContent:"space-between", gap:8 }}>
+                                  <span style={{ fontSize:13, color:"#8a3030", fontFamily:"sans-serif" }}>⚠️ Confermi eliminazione?</span>
+                                  <div style={{ display:"flex", gap:6 }}>
+                                    <button onClick={()=>setDeleteConfirm(null)} style={{ background:"#fff", border:`1px solid ${C.border}`, borderRadius:6, padding:"5px 10px", cursor:"pointer", fontSize:12, color:C.mid, fontFamily:"sans-serif" }}>Annulla</button>
+                                    <button onClick={()=>{ deleteBooking(b.id); setDeleteConfirm(null); }} style={{ background:C.red, border:"none", borderRadius:6, padding:"5px 10px", cursor:"pointer", fontSize:12, color:"#fff", fontFamily:"sans-serif" }}>Sì, elimina</button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div style={{ marginTop:10, display:"flex", justifyContent:"flex-end" }}>
+                                  <button onClick={()=>setDeleteConfirm(b.id)} style={{ background:"#fdf5f5", border:`1px solid ${C.red}33`, borderRadius:6, padding:"5px 12px", cursor:"pointer", fontSize:12, color:C.red, fontFamily:"sans-serif" }}>🗑 Elimina</button>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+
+            )}
           </div>
         )}
 
@@ -534,8 +767,12 @@ export default function CheckInApp() {
                   color={saveStatus==="saved" ? C.green : C.brown}
                   disabled={!capoOk || saveStatus==="saving" || !!conflict}
                   onClick={handleSave}
-                  style={{ fontSize:18, padding:"14px" }}>
+                  style={{ fontSize:18, padding:"14px", marginBottom:10 }}>
                   {saveStatus==="saving" ? "Salvataggio…" : saveStatus==="saved" ? "✓ Gruppo salvato!" : "💾 Salva gruppo"}
+                </Btn>
+                <Btn full color="#e2d8cc" textColor={C.mid}
+                  onClick={() => { setBooking(emptyBooking()); setInsertStep("stay"); setConflict(null); }}>
+                  ✕ Annulla
                 </Btn>
                 {!capoOk && <p style={{ textAlign:"center", fontSize:12, color:C.muted, fontFamily:"sans-serif", marginTop:6 }}>Compila almeno cognome, nome e data di nascita del capogruppo</p>}
               </div>
@@ -567,45 +804,66 @@ export default function CheckInApp() {
                 <h2 style={{ fontFamily:"'Cormorant Garamond', serif", fontSize:22, color:C.dark, marginTop:0 }}>
                   Export Questura · Alloggiati Web
                 </h2>
-                <p style={{ color:C.mid, fontSize:14, lineHeight:1.6, margin:"0 0 20px" }}>
+                <p style={{ color:C.mid, fontSize:14, lineHeight:1.6, margin:"0 0 16px" }}>
                   Seleziona la data di arrivo. Verranno inclusi tutti i soggiorni con check-in in quella data.
                 </p>
 
-                <div style={{ marginBottom:20 }}>
-                  <label style={{ fontSize:11, textTransform:"uppercase", letterSpacing:"0.12em", color:C.muted, fontFamily:"sans-serif", display:"block", marginBottom:6 }}>Data di arrivo</label>
-                  <input type="date" value={expDate} onChange={e=>setExpDate(e.target.value)}
-                    style={{ padding:"10px 14px", border:`1px solid ${C.border}`, borderRadius:8, fontFamily:"'Crimson Pro', serif", fontSize:16, background:C.cream, color:C.dark, outline:"none" }} />
+                <div style={{ display:"flex", gap:12, alignItems:"flex-end", marginBottom:16, flexWrap:"wrap" }}>
+                  <div style={{ flex:1, minWidth:160 }}>
+                    <label style={{ fontSize:11, textTransform:"uppercase", letterSpacing:"0.12em", color:C.muted, fontFamily:"sans-serif", display:"block", marginBottom:6 }}>Data di arrivo</label>
+                    <input type="date" value={expDate} onChange={e=>setExpDate(e.target.value)}
+                      style={{ width:"100%", padding:"10px 14px", border:`1px solid ${C.border}`, borderRadius:8, fontFamily:"'Crimson Pro', serif", fontSize:16, background:C.cream, color:C.dark, outline:"none" }} />
+                  </div>
+                  {/* Filtro non esportati */}
+                  <button onClick={()=>setFilterNonExp(f=>!f)} style={{
+                    padding:"10px 14px", border:`1.5px solid ${filterNonExp?C.brown:C.border}`,
+                    borderRadius:8, background:filterNonExp?C.brown+"10":"#fff",
+                    color:filterNonExp?C.brown:C.muted, fontFamily:"sans-serif", fontSize:13,
+                    cursor:"pointer", whiteSpace:"nowrap"
+                  }}>
+                    {filterNonExp ? "✓ Solo da esportare" : "Tutti i soggiorni"}
+                  </button>
                 </div>
 
-                {/* preview */}
+                {/* Lista soggiorni con flag */}
                 <div style={{ background:C.light, borderRadius:10, padding:14, marginBottom:20, minHeight:60 }}>
                   {dbLoading ? <span style={{color:C.muted,fontSize:14,fontFamily:"sans-serif"}}>Caricamento…</span> :
                    bookingsForDate.length===0 ? (
                     <span style={{ color:C.muted, fontSize:14, fontFamily:"sans-serif" }}>
-                      Nessun soggiorno trovato per il {expDate}
+                      Nessun soggiorno trovato per il {expDate}{filterNonExp?" (tutti già esportati)":""}
                     </span>
                   ) : (
                     <>
                       <div style={{ fontSize:12, textTransform:"uppercase", letterSpacing:"0.1em", color:C.muted, fontFamily:"sans-serif", marginBottom:8 }}>
-                        {bookingsForDate.reduce((s,b)=>s+b.guests.length,0)} ospiti in {bookingsForDate.length} {bookingsForDate.length===1?"soggiorno":"soggiorni"}
+                        {bookingsForDate.reduce((s,b)=>s+b.guests.length,0)} ospiti · {bookingsForDate.length} soggiorni
                       </div>
                       {bookingsForDate.map(b=>(
-                        <div key={b.id} style={{ display:"flex", justifyContent:"space-between", padding:"6px 0", borderBottom:`1px solid ${C.border}`, fontFamily:"sans-serif", fontSize:13 }}>
-                          <span style={{ color:C.dark }}>{b.guests[0]?.cognome} {b.guests[0]?.nome} {b.guests.length>1?`+${b.guests.length-1}`:""}</span>
-                          <span style={{ color:C.muted }}>{b.stanza}</span>
+                        <div key={b.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"8px 0", borderBottom:`1px solid ${C.border}` }}>
+                          <div>
+                            <span style={{ fontFamily:"sans-serif", fontSize:13, color:C.dark }}>{b.guests[0]?.cognome} {b.guests[0]?.nome} {b.guests.length>1?`+${b.guests.length-1}`:""}</span>
+                            <span style={{ fontSize:12, color:C.muted, fontFamily:"sans-serif", marginLeft:8 }}>{b.stanza}</span>
+                          </div>
+                          <button onClick={()=>toggleFlag(b.id,"expQuestura")} style={{
+                            padding:"3px 10px", borderRadius:12, fontSize:11, fontFamily:"sans-serif", cursor:"pointer",
+                            background: b.expQuestura ? C.green+"18" : "#fff",
+                            color: b.expQuestura ? C.green : C.muted,
+                            border: `1px solid ${b.expQuestura ? C.green+"44" : C.border}`
+                          }}>
+                            {b.expQuestura ? "✓ Esportato" : "Da esportare"}
+                          </button>
                         </div>
                       ))}
                     </>
                   )}
                 </div>
 
-                <Btn full color={C.wine} onClick={exportQuestura}
-                  disabled={bookingsForDate.length===0}>
-                  📥 Scarica file .txt per Alloggiati Web
+                <Btn full color={C.wine} onClick={exportQuestura} disabled={bookingsForDate.length===0}>
+                  📥 Scarica .txt per Alloggiati Web
                 </Btn>
                 {bookingsForDate.length>0 && (
                   <p style={{ textAlign:"center", fontSize:12, color:C.muted, fontFamily:"sans-serif", marginTop:8 }}>
                     → Carica su <strong>alloggiatiweb.poliziadistato.it</strong>
+                    <br/><span style={{color:C.faint,fontSize:11}}>Il flag viene impostato automaticamente al download</span>
                   </p>
                 )}
               </div>
@@ -617,34 +875,41 @@ export default function CheckInApp() {
                 <h2 style={{ fontFamily:"'Cormorant Garamond', serif", fontSize:22, color:C.dark, marginTop:0 }}>
                   Export ISTAT · ROSS 1000 Piemonte
                 </h2>
-                <p style={{ color:C.mid, fontSize:14, lineHeight:1.6, margin:"0 0 20px" }}>
-                  Seleziona il mese di riferimento. Verranno inclusi tutti i soggiorni con check-in nel mese scelto.
+                <p style={{ color:C.mid, fontSize:14, lineHeight:1.6, margin:"0 0 16px" }}>
+                  Seleziona il mese di riferimento.
                 </p>
 
-                {/* Month + Year selector */}
-                <div style={{ display:"flex", gap:10, marginBottom:20, alignItems:"flex-end" }}>
-                  <div style={{ flex:2 }}>
+                <div style={{ display:"flex", gap:10, marginBottom:16, alignItems:"flex-end", flexWrap:"wrap" }}>
+                  <div style={{ flex:2, minWidth:120 }}>
                     <label style={{ fontSize:11, textTransform:"uppercase", letterSpacing:"0.12em", color:C.muted, fontFamily:"sans-serif", display:"block", marginBottom:6 }}>Mese</label>
                     <select value={expMonth} onChange={e=>setExpMonth(Number(e.target.value))}
                       style={{ width:"100%", padding:"10px 14px", border:`1px solid ${C.border}`, borderRadius:8, fontFamily:"'Crimson Pro', serif", fontSize:16, background:C.cream, color:C.dark, outline:"none" }}>
                       {MONTHS_IT.map((m,i)=><option key={i} value={i}>{m}</option>)}
                     </select>
                   </div>
-                  <div style={{ flex:1 }}>
+                  <div style={{ flex:1, minWidth:80 }}>
                     <label style={{ fontSize:11, textTransform:"uppercase", letterSpacing:"0.12em", color:C.muted, fontFamily:"sans-serif", display:"block", marginBottom:6 }}>Anno</label>
                     <select value={expYear} onChange={e=>setExpYear(Number(e.target.value))}
                       style={{ width:"100%", padding:"10px 14px", border:`1px solid ${C.border}`, borderRadius:8, fontFamily:"'Crimson Pro', serif", fontSize:16, background:C.cream, color:C.dark, outline:"none" }}>
                       {years.map(y=><option key={y} value={y}>{y}</option>)}
                     </select>
                   </div>
+                  <button onClick={()=>setFilterNonExp(f=>!f)} style={{
+                    padding:"10px 14px", border:`1.5px solid ${filterNonExp?C.brown:C.border}`,
+                    borderRadius:8, background:filterNonExp?C.brown+"10":"#fff",
+                    color:filterNonExp?C.brown:C.muted, fontFamily:"sans-serif", fontSize:13,
+                    cursor:"pointer", whiteSpace:"nowrap"
+                  }}>
+                    {filterNonExp ? "✓ Solo da esportare" : "Tutti i soggiorni"}
+                  </button>
                 </div>
 
-                {/* preview */}
+                {/* Lista soggiorni con flag */}
                 <div style={{ background:C.light, borderRadius:10, padding:14, marginBottom:20, minHeight:60 }}>
                   {dbLoading ? <span style={{color:C.muted,fontSize:14,fontFamily:"sans-serif"}}>Caricamento…</span> :
                    bookingsForMonth.length===0 ? (
                     <span style={{ color:C.muted, fontSize:14, fontFamily:"sans-serif" }}>
-                      Nessun soggiorno trovato per {MONTHS_IT[expMonth]} {expYear}
+                      Nessun soggiorno trovato per {MONTHS_IT[expMonth]} {expYear}{filterNonExp?" (tutti già esportati)":""}
                     </span>
                   ) : (
                     <>
@@ -652,44 +917,36 @@ export default function CheckInApp() {
                         {bookingsForMonth.reduce((s,b)=>s+b.guests.length,0)} ospiti · {bookingsForMonth.length} soggiorni
                       </div>
                       {bookingsForMonth.map(b=>(
-                        <div key={b.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"6px 0", borderBottom:`1px solid ${C.border}`, fontFamily:"sans-serif", fontSize:13 }}>
-                          <span style={{ color:C.dark }}>{b.guests[0]?.cognome} {b.guests[0]?.nome} {b.guests.length>1?`+${b.guests.length-1}`:""}</span>
-                          <span style={{ color:C.muted }}>{b.stanza} · {b.dataArrivo}</span>
+                        <div key={b.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"8px 0", borderBottom:`1px solid ${C.border}` }}>
+                          <div>
+                            <span style={{ fontFamily:"sans-serif", fontSize:13, color:C.dark }}>{b.guests[0]?.cognome} {b.guests[0]?.nome} {b.guests.length>1?`+${b.guests.length-1}`:""}</span>
+                            <span style={{ fontSize:12, color:C.muted, fontFamily:"sans-serif", marginLeft:8 }}>{b.stanza} · {b.dataArrivo}</span>
+                          </div>
+                          <button onClick={()=>toggleFlag(b.id,"expISTAT")} style={{
+                            padding:"3px 10px", borderRadius:12, fontSize:11, fontFamily:"sans-serif", cursor:"pointer",
+                            background: b.expISTAT ? C.green+"18" : "#fff",
+                            color: b.expISTAT ? C.green : C.muted,
+                            border: `1px solid ${b.expISTAT ? C.green+"44" : C.border}`
+                          }}>
+                            {b.expISTAT ? "✓ Esportato" : "Da esportare"}
+                          </button>
                         </div>
                       ))}
                     </>
                   )}
                 </div>
 
-                <Btn full color={C.blue} onClick={exportISTAT}
-                  disabled={bookingsForMonth.length===0}>
-                  📥 Scarica CSV per ROSS 1000 · {MONTHS_IT[expMonth]} {expYear}
+                <Btn full color={C.blue} onClick={exportISTAT} disabled={bookingsForMonth.length===0}>
+                  📥 Scarica CSV · {MONTHS_IT[expMonth]} {expYear}
                 </Btn>
                 {bookingsForMonth.length>0 && (
                   <p style={{ textAlign:"center", fontSize:12, color:C.muted, fontFamily:"sans-serif", marginTop:8 }}>
                     → Importa su <strong>servizi.regione.piemonte.it</strong> → Piemonte Dati Turismo<br/>
-                    <span style={{color:C.faint}}>Scadenza: entro il 10 del mese successivo</span>
+                    <span style={{color:C.faint}}>Scadenza: entro il 10 del mese successivo · Il flag viene impostato automaticamente al download</span>
                   </p>
                 )}
               </div>
             )}
-
-            {/* Archivio soggiorni (sotto export) */}
-            <div style={{ marginTop:22 }}>
-              <h3 style={{ fontFamily:"'Cormorant Garamond', serif", fontSize:18, color:C.dark, marginBottom:12 }}>
-                Archivio soggiorni
-              </h3>
-              {dbLoading && <div style={{...cardStyle,textAlign:"center",color:C.muted,padding:24}}>Caricamento…</div>}
-              {!dbLoading && bookings.length===0 && (
-                <div style={{...cardStyle,textAlign:"center",padding:36,color:C.muted}}>
-                  <div style={{fontSize:32,marginBottom:8}}>📭</div>
-                  Nessun soggiorno registrato
-                </div>
-              )}
-              {bookings.map(b=>(
-                <BookingRow key={b.id} booking={b} onDelete={()=>deleteBooking(b.id)} />
-              ))}
-            </div>
           </div>
         )}
 
