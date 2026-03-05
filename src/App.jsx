@@ -55,6 +55,7 @@ function findConflict(bookings, newBooking) {
 }
 
 // ─── STORAGE ──────────────────────────────────────────────────────────────────
+const SHEETS_URL = "https://script.google.com/macros/s/AKfycbzllua3NYRFIjWA4OOGw_ZBy6F-FYlb8LRuieVSHeGLaYdhMiPR-tUnr70ZI9X7k05O/exec";
 const DB_KEY = "checkin-bookings-v3";
 async function loadBookings() {
   try { const r = await window.storage.get(DB_KEY); return r ? JSON.parse(r.value) : []; }
