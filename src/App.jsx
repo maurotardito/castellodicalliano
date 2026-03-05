@@ -317,10 +317,19 @@ method:"POST", headers:{"Content-Type":"application/json","x-api-key":import.met
   }, []);
 
   // ── save ──
-  const handleSave = async () => {
+   const handleSave = async () => {
     const c = findConflict(bookings, booking);
-    if (c) { setConflict(c); return; }   // double-check at save time
+    if (c) { setConflict(c); return; }
     setSaveStatus("saving");
+    // Salva su Google Sheets
+    try {
+      await fetch(SHEETS_URL, {
+        method: "POST",
+        mode: "no-cors",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(booking)
+      });
+    } catch(e) { console.error("Sheets error", e); }
     const b = {...booking, id: booking.id||Date.now().toString(), createdAt: booking.createdAt||new Date().toISOString()};
     const updated = [b, ...bookings.filter(x=>x.id!==b.id)];
     setBookings(updated);
