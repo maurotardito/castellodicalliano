@@ -48,12 +48,12 @@ function findConflict(bookings, newBooking) {
   const FAR = "9999-12-31";
   const newIn  = newBooking.dataArrivo   || FAR;
   const newOut = newBooking.dataPartenza || FAR;
-  return bookings.find(b => {
-    if (b.id === newBooking.id) return false;         // same booking (edit mode)
-    if (b.stanza !== newBooking.stanza) return false; // different room
+  return bookings.filter(b => !b._wbCancelled).find(b => {
+    if (b.id === newBooking.id) return false;
+    if (b.stanza !== newBooking.stanza) return false;
     const bIn  = b.dataArrivo   || FAR;
     const bOut = b.dataPartenza || FAR;
-    return newIn < bOut && bIn < newOut;              // date overlap
+    return newIn < bOut && bIn < newOut;
   }) || null;
 }
 
@@ -289,20 +289,18 @@ export default function CheckInApp() {
   const updB = k => v => setBooking(b => {
     let updated = {...b, [k]:v};
 
-    // Validazione date: checkout non può essere prima o uguale al checkin
+    // Validazione date: solo se entrambe presenti
     if (k === "dataPartenza" && updated.dataArrivo && v && v <= updated.dataArrivo) {
       alert("La data di partenza deve essere successiva alla data di arrivo.");
-      return b; // non aggiornare
+      return b;
     }
-    if (k === "dataArrivo" && updated.dataPartenza && updated.dataPartenza <= v) {
-      updated = {...updated, dataPartenza: ""}; // resetta partenza se non valida
+    if (k === "dataArrivo" && updated.dataPartenza && v && v >= updated.dataPartenza) {
+      updated = {...updated, dataPartenza: ""};
     }
 
     // Calcolo automatico notti
     if ((k === "dataArrivo" || k === "dataPartenza") && updated.dataArrivo && updated.dataPartenza) {
-      const arrivo = new Date(updated.dataArrivo);
-      const partenza = new Date(updated.dataPartenza);
-      const notti = Math.round((partenza - arrivo) / (1000*60*60*24));
+      const notti = Math.round((new Date(updated.dataPartenza) - new Date(updated.dataArrivo)) / (1000*60*60*24));
       if (notti > 0) updated = {...updated, numPernottamenti: String(notti)};
     }
 
@@ -468,19 +466,36 @@ export default function CheckInApp() {
       };
 
       let imported = 0;
-      const newBookings = [];
-      const seen = new Set(bookings.map(b => b._wbCode));
+      let merged = 0;
+      const updatedBookings = [...bookings];
 
       for (const line of lines.slice(1)) {
         const r = parseRow(line);
         const rowType = r[idx("Row Type")];
-        if (rowType !== "ROOM") continue; // salta righe TOTAL
+        if (rowType !== "ROOM") continue;
 
         const code    = r[idx("Code")];
         const status  = r[idx("Status")];
-        if (!status || status === "Cancelled" || status === "Cancellata") continue;
-        if (seen.has(code)) continue;
-        seen.add(code);
+        if (!code) continue;
+
+        // Cerca prenotazione esistente con stesso codice WuBook
+        const existingIdx = updatedBookings.findIndex(b => b._wbCode === code);
+
+        // Gestione cancellazioni
+        if (status === "Cancelled" || status === "Cancellata") {
+          if (existingIdx >= 0) {
+            const existing = updatedBookings[existingIdx];
+            const hasDocAlready = existing.guests.some(g => g.numDoc && g.numDoc.trim());
+            if (hasDocAlready) {
+              // ha già documento → marca come cancellata ma non eliminare
+              updatedBookings[existingIdx] = {...existing, _wbCancelled: true};
+            } else {
+              // nessun documento → elimina
+              updatedBookings.splice(existingIdx, 1);
+            }
+          }
+          continue;
+        }
 
         const booker   = r[idx("Booker")] || "";
         const country  = r[idx("Country")] || "";
@@ -488,45 +503,67 @@ export default function CheckInApp() {
         const to       = r[idx("To")];
         const nights   = r[idx("Nights")];
         const roomName = r[idx("Room Name")] || "";
-        const agency   = r[idx("Agency")] || "";
 
         if (!booker || !from || !to) continue;
 
-        // Split booker in nome/cognome (assume "Nome Cognome")
-        const parts = booker.trim().split(" ");
+        const parts   = booker.trim().split(" ");
         const nome    = parts[0] || "";
         const cognome = parts.slice(1).join(" ") || "";
-
         const cittadinanza = COUNTRY_TO_IT[country] || (country ? country : "");
         const stanza = mapStanza(roomName);
-        const dataArrivo  = parseDateWb(from);
+        const dataArrivo   = parseDateWb(from);
         const dataPartenza = parseDateWb(to);
 
-        const guest = {
-          ...emptyPerson(),
-          nome: nome.charAt(0).toUpperCase()+nome.slice(1).toLowerCase(),
-          cognome: cognome.charAt(0).toUpperCase()+cognome.slice(1).toLowerCase(),
-          cittadinanza,
-          statoNascita: cittadinanza,
-        };
-        newBookings.push({
-          id: `wb_${code}_${Date.now()}_${imported}`,
-          _wbCode: code,
-          stanza,
-          dataArrivo, dataPartenza,
-          numPernottamenti: nights || "",
-          guests: [guest],
-          _fromWuBook: true
-        });
-        imported++;
+        if (existingIdx >= 0) {
+          // MERGE: aggiorna date/stanza da WuBook, ma preserva i dati documento già inseriti
+          const existing = updatedBookings[existingIdx];
+          const mergedGuests = existing.guests.map((g, i) => {
+            const hasDocAlready = g.numDoc && g.numDoc.trim();
+            if (hasDocAlready) return g; // preserva tutto se ha già il documento
+            // aggiorna solo i campi base da WuBook se vuoti
+            return {
+              ...g,
+              nome: g.nome || (i===0 ? nome : g.nome),
+              cognome: g.cognome || (i===0 ? cognome : g.cognome),
+              cittadinanza: g.cittadinanza || cittadinanza,
+              statoNascita: g.statoNascita || cittadinanza,
+            };
+          });
+          updatedBookings[existingIdx] = {
+            ...existing,
+            stanza: stanza || existing.stanza,
+            dataArrivo: dataArrivo || existing.dataArrivo,
+            dataPartenza: dataPartenza || existing.dataPartenza,
+            numPernottamenti: nights || existing.numPernottamenti,
+            guests: mergedGuests,
+            _wbCancelled: false,
+          };
+          merged++;
+        } else {
+          // NUOVO inserimento
+          const guest = {
+            ...emptyPerson(),
+            nome: nome.charAt(0).toUpperCase()+nome.slice(1).toLowerCase(),
+            cognome: cognome.charAt(0).toUpperCase()+cognome.slice(1).toLowerCase(),
+            cittadinanza,
+            statoNascita: cittadinanza,
+          };
+          updatedBookings.push({
+            id: `wb_${code}_${Date.now()}_${imported}`,
+            _wbCode: code,
+            stanza,
+            dataArrivo, dataPartenza,
+            numPernottamenti: nights || "",
+            guests: [guest],
+            _fromWuBook: true
+          });
+          imported++;
+        }
       }
 
-      if (newBookings.length > 0) {
-        const merged = [...bookings, ...newBookings];
-        setBookings(merged);
-        await saveBookings(merged);
-      }
-      setWbStatus(`ok:${imported}`);
+      setBookings(updatedBookings);
+      await saveBookings(updatedBookings);
+      setWbStatus(`ok:${imported}:${merged}`);
     } catch(err) {
       console.error(err);
       setWbStatus("error");
@@ -560,7 +597,7 @@ export default function CheckInApp() {
                 color: wbStatus?.startsWith("ok") ? "#7ecf7e" : wbStatus==="error" ? "#f08080" : "#ccc",
                 fontSize:12, fontFamily:"sans-serif", display:"flex", alignItems:"center", gap:5, whiteSpace:"nowrap"
               }}>
-                {wbImporting ? "⏳" : wbStatus?.startsWith("ok") ? `✓ +${wbStatus.split(":")[1]}` : wbStatus==="error" ? "⚠️ Errore" : "📥 WuBook"}
+                {wbImporting ? "⏳" : wbStatus?.startsWith("ok") ? `✓ +${wbStatus.split(":")[1]} ~${wbStatus.split(":")[2]}` : wbStatus==="error" ? "⚠️ Errore" : "📥 WuBook"}
               </button>
               <img src={LOGO_RECT} alt="Castello di Calliano" style={{ height:48, width:"auto", objectFit:"contain", flexShrink:0 }} />
             </div>
@@ -605,15 +642,17 @@ export default function CheckInApp() {
                 return d.toISOString().split("T")[0];
               });
               const FAR = "9999-12-31";
+              const activeBookings = bookings.filter(b => !b._wbCancelled);
               const isOccupied = (stanza, day) =>
-                bookings.some(b => b.stanza === stanza &&
+                activeBookings.some(b => b.stanza === stanza &&
                   (b.dataArrivo||FAR) <= day && (!b.dataPartenza || b.dataPartenza > day));
               const getBookingFor = (stanza, day) =>
-                bookings.find(b => b.stanza === stanza &&
+                activeBookings.find(b => b.stanza === stanza &&
                   (b.dataArrivo||FAR) <= day && (!b.dataPartenza || b.dataPartenza > day));
               // Controlla se tutti gli ospiti hanno documento caricato
               const hasDoc = bk => bk && bk.guests.every(g => g.numDoc && g.numDoc.trim());
               const dayNames = ["D","L","M","M","G","V","S"];
+              const monthNames = ["gennaio","febbraio","marzo","aprile","maggio","giugno","luglio","agosto","settembre","ottobre","novembre","dicembre"];
               const todayStr = today();
               return (
                 <div style={cardStyle}>
@@ -638,13 +677,27 @@ export default function CheckInApp() {
                     <span><span style={{ display:"inline-block", width:12, height:12, borderRadius:3, background:"#999", marginRight:4, verticalAlign:"middle" }}/>Occupata · doc ok</span>
                   </div>
 
+                  {/* Header mese */}
+                  {(() => {
+                    const months = [...new Set(days.map(d => new Date(d).getMonth()))];
+                    const label = months.length === 1
+                      ? monthNames[months[0]]
+                      : <>{monthNames[months[0]]}<span style={{ margin:"0 6px", opacity:0.4 }}>—</span>{monthNames[months[1]]}</>;
+                    return (
+                      <div style={{ textAlign:"center", fontSize:11, fontFamily:"sans-serif", color:C.muted, fontWeight:600, letterSpacing:"0.05em", textTransform:"uppercase", marginBottom:6 }}>
+                        {label}
+                      </div>
+                    );
+                  })()}
+
                   {/* Header giorni */}
                   <div style={{ display:"grid", gridTemplateColumns:"90px repeat(14, 1fr)", gap:2, marginBottom:4 }}>
                     <div />
                     {days.map(d => {
                       const isToday = d === todayStr;
-                      const dayNum = new Date(d).getDate();
-                      const dayName = dayNames[new Date(d).getDay()];
+                      const dt = new Date(d);
+                      const dayNum = dt.getDate();
+                      const dayName = dayNames[dt.getDay()];
                       return (
                         <div key={d} style={{ textAlign:"center", fontSize:10, fontFamily:"sans-serif", color: isToday ? C.brown : C.muted, fontWeight: isToday ? 700 : 400 }}>
                           <div>{dayName}</div>
@@ -666,6 +719,7 @@ export default function CheckInApp() {
                         const isToday = d === todayStr;
                         const cellColor = !occ ? "#c45a5a" : hasDoc(bk) ? "#999" : "#5a9a5a";
                         const tooltip = bk ? `${bk.guests[0]?.cognome} ${bk.guests[0]?.nome}${hasDoc(bk) ? " · doc ok" : " · doc mancante"}` : "Libera";
+                        const initials = bk ? `${(bk.guests[0]?.cognome?.[0]||"").toUpperCase()}${(bk.guests[0]?.nome?.[0]||"").toUpperCase()}` : "";
                         return (
                           <div key={d} title={tooltip}
                             style={{
@@ -673,8 +727,11 @@ export default function CheckInApp() {
                               background: cellColor,
                               border: isToday ? `1.5px solid ${C.brown}` : "none",
                               cursor: occ ? "pointer" : "default",
-                              opacity: 0.85
-                            }} />
+                              display:"flex", alignItems:"center", justifyContent:"center",
+                              fontSize:9, fontWeight:700, color:"rgba(255,255,255,0.9)",
+                              fontFamily:"sans-serif", letterSpacing:"0.03em", overflow:"hidden",
+                              opacity: 0.9
+                            }}>{initials}</div>
                         );
                       })}
                     </div>
@@ -845,10 +902,12 @@ export default function CheckInApp() {
                 </div>
 
                 {/* Date */}
-                <div style={{ display:"grid", gridTemplateColumns:"5fr 5fr 3fr", gap:8, marginBottom:22 }}>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:22 }}>
                   <Field label="Arrivo" value={booking.dataArrivo} onChange={updB("dataArrivo")} type="date" />
                   <Field label="Partenza" value={booking.dataPartenza} onChange={updB("dataPartenza")} type="date" />
-                  <Field label="Notti" value={booking.numPernottamenti} onChange={updB("numPernottamenti")} type="number" />
+                  <div style={{ gridColumn:"span 2", maxWidth:120 }}>
+                    <Field label="Notti" value={booking.numPernottamenti} onChange={updB("numPernottamenti")} type="number" />
+                  </div>
                 </div>
 
                 {/* Conflict warning */}
@@ -968,13 +1027,13 @@ export default function CheckInApp() {
                   <div>
                     <label style={{ fontSize:11, textTransform:"uppercase", letterSpacing:"0.12em", color:C.muted, fontFamily:"sans-serif", display:"block", marginBottom:6 }}>Data di arrivo</label>
                     <input type="date" value={expDate} onChange={e=>setExpDate(e.target.value)}
-                      style={{ width:"100%", padding:"10px 12px", border:`1px solid ${C.border}`, borderRadius:8, fontFamily:"'Crimson Pro', serif", fontSize:15, background:C.cream, color:C.dark, outline:"none", boxSizing:"border-box" }} />
+                      style={{ width:"100%", padding:"10px", border:`1.5px solid ${C.border}`, borderRadius:8, fontFamily:"'Crimson Pro', serif", fontSize:15, background:C.cream, color:C.dark, outline:"none", boxSizing:"border-box" }} />
                   </div>
                   <button onClick={()=>setFilterNonExp(f=>!f)} style={{
                     width:"100%", padding:"10px", border:`1.5px solid ${filterNonExp?C.brown:C.border}`,
                     borderRadius:8, background:filterNonExp?C.brown+"10":"#fff",
                     color:filterNonExp?C.brown:C.muted, fontFamily:"sans-serif", fontSize:13,
-                    cursor:"pointer", textAlign:"center"
+                    cursor:"pointer", boxSizing:"border-box"
                   }}>
                     {filterNonExp ? "✓ Solo da esportare" : "Tutti i soggiorni"}
                   </button>
