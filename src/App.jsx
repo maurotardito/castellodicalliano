@@ -361,6 +361,20 @@ export default function CheckInApp() {
     setBookings(updated); await saveBookings(updated);
   };
 
+  // ── apri inserimento/modifica dal calendario ──
+  const openFromCalendar = (stanza, day, existingBooking) => {
+    if (existingBooking) {
+      setBooking(existingBooking);
+      setInsertStep("stay");
+    } else {
+      setBooking({...emptyBooking(), stanza, dataArrivo: day});
+      setInsertStep("stay");
+    }
+    setConflict(null);
+    setTab("inserimento");
+    setTimeout(() => window.scrollTo({top:0, behavior:"smooth"}), 50);
+  };
+
   const toggleFlag = async (id, field) => {
     const updated = bookings.map(b => b.id===id ? {...b, [field]:!b[field]} : b);
     setBookings(updated); await saveBookings(updated);
@@ -716,17 +730,21 @@ export default function CheckInApp() {
                       {days.map(d => {
                         const occ = isOccupied(stanza, d);
                         const bk = occ ? getBookingFor(stanza, d) : null;
+                        // cella cliccabile solo se è check-in o libera (non giorni intermedi di un soggiorno)
+                        const isCheckIn = bk && bk.dataArrivo === d;
                         const isToday = d === todayStr;
                         const cellColor = !occ ? "#c45a5a" : hasDoc(bk) ? "#999" : "#5a9a5a";
-                        const tooltip = bk ? `${bk.guests[0]?.cognome} ${bk.guests[0]?.nome}${hasDoc(bk) ? " · doc ok" : " · doc mancante"}` : "Libera";
+                        const tooltip = bk ? `${bk.guests[0]?.cognome} ${bk.guests[0]?.nome}${hasDoc(bk) ? " · doc ok" : " · doc mancante"}` : "Clicca per inserire";
                         const initials = bk ? `${(bk.guests[0]?.cognome?.[0]||"").toUpperCase()}${(bk.guests[0]?.nome?.[0]||"").toUpperCase()}` : "";
+                        const clickable = !occ || isCheckIn;
                         return (
                           <div key={d} title={tooltip}
+                            onClick={() => clickable && openFromCalendar(stanza, d, isCheckIn ? bk : null)}
                             style={{
                               height:28, borderRadius:4,
                               background: cellColor,
                               border: isToday ? `1.5px solid ${C.brown}` : "none",
-                              cursor: occ ? "pointer" : "default",
+                              cursor: clickable ? "pointer" : "default",
                               display:"flex", alignItems:"center", justifyContent:"center",
                               fontSize:9, fontWeight:700, color:"rgba(255,255,255,0.9)",
                               fontFamily:"sans-serif", letterSpacing:"0.03em", overflow:"hidden",
